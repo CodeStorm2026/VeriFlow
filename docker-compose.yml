@@ -1,0 +1,112 @@
+version: "3.9"
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.1
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
+      KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:29092"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+
+  redis:
+    image: redis:7.2-alpine
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    volumes:
+      - "./infra/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro"
+    ports:
+      - "6379:6379"
+
+  reconciliation-engine:
+    build: ./backend
+    command: ["python", "-m", "services.reconciliation_engine"]
+    environment:
+      VF_SERVICE_NAME: "reconciliation-engine"
+      VF_KAFKA_BOOTSTRAP: "kafka:9092"
+      VF_REDIS_URL: "redis://redis:6379/0"
+    depends_on:
+      - kafka
+      - redis
+
+  websocket-api:
+    build: ./backend
+    command: ["python", "-m", "services.websocket_api"]
+    environment:
+      VF_SERVICE_NAME: "websocket-api"
+      VF_KAFKA_BOOTSTRAP: "kafka:9092"
+      VF_REDIS_URL: "redis://redis:6379/0"
+      VF_API_HOST: "0.0.0.0"
+      VF_API_PORT: "8001"
+    ports:
+      - "8001:8001"
+    depends_on:
+      - kafka
+      - redis
+
+  merchant-simulator:
+    build: ./backend
+    command: ["python", "-m", "services.merchant_simulator"]
+    environment:
+      VF_SERVICE_NAME: "merchant-simulator"
+      VF_NODE_ID: "merchant"
+      VF_KAFKA_BOOTSTRAP: "kafka:9092"
+      VF_SIMULATOR_RATE_PER_SEC: "2.5"
+    depends_on:
+      - kafka
+
+  gateway-simulator:
+    build: ./backend
+    command: ["python", "-m", "services.gateway_simulator"]
+    environment:
+      VF_SERVICE_NAME: "gateway-simulator"
+      VF_NODE_ID: "gateway"
+      VF_KAFKA_BOOTSTRAP: "kafka:9092"
+    depends_on:
+      - kafka
+
+  crypto-exchange-simulator:
+    build: ./backend
+    command: ["python", "-m", "services.crypto_exchange_simulator"]
+    environment:
+      VF_SERVICE_NAME: "crypto-exchange-simulator"
+      VF_NODE_ID: "crypto_exchange"
+      VF_KAFKA_BOOTSTRAP: "kafka:9092"
+    depends_on:
+      - kafka
+
+  bank-simulator:
+    build: ./backend
+    command: ["python", "-m", "services.bank_simulator"]
+    environment:
+      VF_SERVICE_NAME: "bank-simulator"
+      VF_NODE_ID: "bank"
+      VF_KAFKA_BOOTSTRAP: "kafka:9092"
+    depends_on:
+      - kafka
+
+  frontend:
+    build: ./frontend
+    environment:
+      VITE_API_URL: "http://localhost:8001"
+      VITE_WS_URL: "ws://localhost:8001/ws"
+    ports:
+      - "3000:3000"
+    depends_on:
+      - websocket-api

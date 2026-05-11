@@ -1,0 +1,78 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  --vf-bg: #f6f3ee;
+  --vf-surface: rgba(255, 255, 255, 0.85);
+  --vf-ink: #151515;
+  --vf-muted: #6b6b6b;
+  --vf-accent: #0ea5a4;
+  --vf-warning: #f59e0b;
+  --vf-danger: #ef4444;
+  --vf-success: #16a34a;
+  --vf-shadow: rgba(15, 23, 42, 0.12);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Space Grotesk", sans-serif;
+  color: var(--vf-ink);
+  overflow-anchor: none;
+  background:
+    radial-gradient(circle at 10% 20%, rgba(14, 165, 164, 0.12), transparent 45%),
+    radial-gradient(circle at 90% 10%, rgba(14, 116, 144, 0.18), transparent 45%),
+    radial-gradient(circle at 80% 90%, rgba(251, 191, 36, 0.16), transparent 45%),
+    var(--vf-bg);
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.react-flow__pane,
+.react-flow__viewport,
+.react-flow__renderer {
+  caret-color: transparent;
+}
+
+@layer components {
+  .vf-card {
+    @apply rounded-2xl border border-black/10 bg-white/70 shadow-lg backdrop-blur;
+  }
+
+  .vf-pill {
+    @apply rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide;
+  }
+
+  .vf-subtle {
+    @apply text-sm text-slate-500;
+  }
+
+  .vf-grid-glow {
+    background-image:
+      linear-gradient(transparent 94%, rgba(15, 23, 42, 0.04) 96%),
+      linear-gradient(90deg, transparent 94%, rgba(15, 23, 42, 0.04) 96%);
+    background-size: 24px 24px;
+  }
+}
+
+@keyframes lift-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-lift {
+  animation: lift-in 0.6s ease-out both;
+}
