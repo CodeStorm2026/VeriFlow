@@ -16,14 +16,14 @@ const ReplayControls = ({ isReplaying, bufferSize, onReplay, onStop }: ReplayCon
         {!isReplaying ? (
           <button
             onClick={onReplay}
-            className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+            className="vf-button vf-button-primary"
           >
             Replay
           </button>
         ) : (
           <button
             onClick={onStop}
-            className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold"
+            className="vf-button vf-button-ghost"
           >
             Stop
           </button>

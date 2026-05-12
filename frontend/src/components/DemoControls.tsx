@@ -21,13 +21,15 @@ const actions = [
 
 interface DemoControlsProps {
   apiUrl: string;
+  onManualTrigger?: () => void;
 }
 
-const DemoControls = ({ apiUrl }: DemoControlsProps) => {
+const DemoControls = ({ apiUrl, onManualTrigger }: DemoControlsProps) => {
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const trigger = async (payload: Record<string, any>) => {
+    onManualTrigger?.();
     setStatus("Sending...");
     setError(null);
     try {
@@ -62,7 +64,7 @@ const DemoControls = ({ apiUrl }: DemoControlsProps) => {
           <button
             key={action.label}
             onClick={() => trigger(action.payload)}
-            className="rounded-xl border border-black/10 bg-white/80 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:-translate-y-0.5 hover:shadow-glow"
+            className="vf-button vf-button-ghost w-full justify-center"
           >
             {action.label}
           </button>

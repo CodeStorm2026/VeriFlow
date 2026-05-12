@@ -1,9 +1,4 @@
-import {
-  Area,
-  AreaChart,
-  ResponsiveContainer,
-  Tooltip,
-} from "recharts";
+import { CSSProperties } from "react";
 
 import { MetricSeries, MetricsSnapshot } from "../types";
 
@@ -17,44 +12,66 @@ const MetricsBar = ({ metrics, series }: MetricsBarProps) => {
   const mismatchRate = metrics?.mismatch_rate ?? 0;
   const latency = metrics?.reconciliation_latency_ms ?? 0;
   const activeIncidents = metrics?.active_incidents ?? 0;
+  const lastUpdate = series[series.length - 1]?.ts;
+
+  const normalize = (value: number, max: number) => {
+    if (max <= 0) {
+      return 0;
+    }
+    return Math.max(0, Math.min(100, Math.round((value / max) * 100)));
+  };
+
+  const mismatchPercent = mismatchRate <= 1 ? Math.round(mismatchRate * 100) : mismatchRate;
+
+  const cards = [
+    {
+      label: "Tx / sec",
+      value: txPerSec.toFixed(1),
+      meta: lastUpdate ? `Updated ${new Date(lastUpdate).toLocaleTimeString()}` : "Live feed",
+      progress: normalize(txPerSec, 120),
+      tone: "var(--vf-accent)",
+    },
+    {
+      label: "Mismatch rate",
+      value: `${mismatchPercent}%`,
+      meta: "Risk exposure",
+      progress: normalize(mismatchPercent, 25),
+      tone: "var(--vf-warning)",
+    },
+    {
+      label: "Recon latency (ms)",
+      value: latency.toFixed(0),
+      meta: "Cross-system lag",
+      progress: normalize(latency, 1200),
+      tone: "#111827",
+    },
+    {
+      label: "Active incidents",
+      value: activeIncidents.toString(),
+      meta: "Open investigations",
+      progress: normalize(activeIncidents, 20),
+      tone: "var(--vf-danger)",
+    },
+  ];
 
   return (
-    <div className="vf-card p-4">
-      <div className="mb-4 text-sm font-semibold">Metrics</div>
-      <div className="grid grid-cols-2 gap-3">
-        <div className="rounded-xl border border-black/5 bg-white/70 p-3">
-          <div className="text-xs uppercase text-slate-400">Tx / sec</div>
-          <div className="text-2xl font-semibold text-slate-900">{txPerSec}</div>
-          <div className="mt-2 h-16">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={series}>
-                <Tooltip wrapperStyle={{ fontSize: 10 }} />
-                <Area type="monotone" dataKey="tx_per_sec" stroke="#0ea5a4" fill="#99f6e4" />
-              </AreaChart>
-            </ResponsiveContainer>
+    <div className="vf-stat-grid">
+      {cards.map((card) => (
+        <div key={card.label} className="vf-stat">
+          <div className="vf-stat-header">
+            <div className="vf-stat-label">{card.label}</div>
+            <div className="vf-stat-value">{card.value}</div>
           </div>
+          <div className="vf-stat-meta">{card.meta}</div>
+          <div
+            className="vf-stat-bar"
+            style={{
+              "--progress": `${card.progress}%`,
+              "--bar-color": card.tone,
+            } as CSSProperties}
+          />
         </div>
-        <div className="rounded-xl border border-black/5 bg-white/70 p-3">
-          <div className="text-xs uppercase text-slate-400">Mismatch rate</div>
-          <div className="text-2xl font-semibold text-slate-900">{mismatchRate}</div>
-          <div className="mt-2 h-16">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={series}>
-                <Tooltip wrapperStyle={{ fontSize: 10 }} />
-                <Area type="monotone" dataKey="mismatch_rate" stroke="#f97316" fill="#fed7aa" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-        <div className="rounded-xl border border-black/5 bg-white/70 p-3">
-          <div className="text-xs uppercase text-slate-400">Recon latency (ms)</div>
-          <div className="text-2xl font-semibold text-slate-900">{latency}</div>
-        </div>
-        <div className="rounded-xl border border-black/5 bg-white/70 p-3">
-          <div className="text-xs uppercase text-slate-400">Active incidents</div>
-          <div className="text-2xl font-semibold text-slate-900">{activeIncidents}</div>
-        </div>
-      </div>
+      ))}
     </div>
   );
 };

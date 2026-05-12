@@ -97,16 +97,23 @@ const GraphPanel = ({ graph }: GraphPanelProps) => {
     };
   });
 
+  const isComplete = graph.nodes.length > 0 && graph.nodes.every((node) => node.status !== "unknown");
+  const statusLabel = isComplete ? "Completed" : "Live";
+  const statusClass = isComplete ? "vf-status vf-status-complete" : "vf-status vf-status-live";
+
   return (
     <div className="vf-card vf-grid-glow min-h-[380px] p-4">
-      <div className="mb-3 flex items-center justify-between">
+      <div className="mb-4 flex items-center justify-between">
         <div>
-          <div className="text-xs uppercase tracking-wide text-slate-400">Live Graph</div>
+          <div className="text-xs uppercase tracking-wide text-slate-400">Live graph</div>
           <div className="text-lg font-semibold">
             {graph.transaction_id} - {graph.flow_type}
           </div>
+          <div className="text-xs text-slate-500">
+            Updated {new Date(graph.updated_at).toLocaleTimeString()}
+          </div>
         </div>
-        <div className="vf-pill bg-emerald-100 text-emerald-700">Live</div>
+        <span className={statusClass}>{statusLabel}</span>
       </div>
       <div className="h-[320px]">
         <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} fitView>

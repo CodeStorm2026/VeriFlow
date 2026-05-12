@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+
 import { GraphSnapshot, Incident } from "../types";
 
 interface TransactionListProps {
@@ -18,66 +20,151 @@ const typeColor: Record<string, string> = {
 };
 
 const TransactionList = ({ graphs, activeId, incidentByTx, onSelect }: TransactionListProps) => {
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!openMenuId) {
+      return;
+    }
+    const handleClick = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest(`[data-menu-id="${openMenuId}"]`)) {
+        return;
+      }
+      setOpenMenuId(null);
+    };
+    document.addEventListener("click", handleClick);
+    return () => document.removeEventListener("click", handleClick);
+  }, [openMenuId]);
+
+  const resolveAmount = (graph: GraphSnapshot) => {
+    const node = graph.nodes.find((item) => typeof item.amount === "number");
+    return typeof node?.amount === "number" ? node.amount : null;
+  };
+
+  const resolveStatus = (graph: GraphSnapshot, incident?: Incident) => {
+    if (incident) {
+      return { label: "Needs action", className: "vf-status vf-status-attention" };
+    }
+    const complete = graph.nodes.length > 0 && graph.nodes.every((node) => node.status !== "unknown");
+    return complete
+      ? { label: "Completed", className: "vf-status vf-status-complete" }
+      : { label: "Monitoring", className: "vf-status vf-status-live" };
+  };
+
+  const resolveRisk = (incident?: Incident) => {
+    if (!incident) {
+      return { label: "Normal", className: "vf-risk vf-risk-low" };
+    }
+    const severity = incident.severity;
+    if (severity === "critical" || severity === "high") {
+      return { label: "High", className: "vf-risk vf-risk-high" };
+    }
+    if (severity === "medium") {
+      return { label: "Medium", className: "vf-risk vf-risk-medium" };
+    }
+    return { label: "Low", className: "vf-risk vf-risk-low" };
+  };
+
   return (
-    <div className="vf-card p-4">
-      <div className="mb-3 flex items-center justify-between">
-        <div className="text-sm font-semibold">Active incidents</div>
-        <div className="vf-subtle">{graphs.length} open</div>
-      </div>
-      <div className="max-h-[520px] overflow-auto rounded-xl border border-black/10 bg-white/70">
-        <table className="w-full text-sm">
-          <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-400">
-            <tr>
-              <th className="px-3 py-2 text-left">Transaction</th>
-              <th className="px-3 py-2 text-left">Flow</th>
-              <th className="px-3 py-2 text-left">Detected</th>
-              <th className="px-3 py-2 text-left">Issue</th>
-              <th className="px-3 py-2 text-right">Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {graphs.slice(0, 12).map((graph) => {
-              const incident = incidentByTx[graph.transaction_id];
-              const type = incident?.type ?? "incident";
-              const rowActive = activeId === graph.transaction_id;
-              return (
-                <tr
-                  key={graph.transaction_id}
-                  className={`border-t border-black/5 ${
-                    rowActive ? "bg-emerald-50/70" : "hover:bg-white"
-                  }`}
-                >
-                  <td className="px-3 py-2 font-semibold text-slate-700">
-                    {graph.transaction_id}
-                  </td>
-                  <td className="px-3 py-2 text-slate-500">{graph.flow_type}</td>
-                  <td className="px-3 py-2 text-slate-500">
-                    {incident?.timestamp
-                      ? new Date(incident.timestamp).toLocaleTimeString()
-                      : new Date(graph.updated_at).toLocaleTimeString()}
-                  </td>
-                  <td className="px-3 py-2">
-                    <span className={`vf-pill ${typeColor[type] || typeColor.incident}`}>
-                      {type.replace(/_/g, " ")}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2 text-right">
+    <div className="vf-table-wrap">
+      <table className="vf-table">
+        <thead>
+          <tr>
+            <th>Transaction</th>
+            <th>Flow</th>
+            <th>Updated</th>
+            <th>Issue</th>
+            <th>Risk</th>
+            <th>Status</th>
+            <th className="text-right">Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {graphs.slice(0, 12).map((graph) => {
+            const incident = incidentByTx[graph.transaction_id];
+            const type = incident?.type ?? "no_issues";
+            const rowActive = activeId === graph.transaction_id;
+            const amount = resolveAmount(graph);
+            const status = resolveStatus(graph, incident);
+            const risk = resolveRisk(incident);
+            const issueLabel = incident ? type.replace(/_/g, " ") : "No anomalies";
+            const issueClass = incident
+              ? typeColor[type] || typeColor.incident
+              : "bg-emerald-100 text-emerald-700";
+            return (
+              <tr
+                key={graph.transaction_id}
+                className={rowActive ? "vf-row-active" : undefined}
+              >
+                <td>
+                  <div className="vf-table-title">{graph.transaction_id}</div>
+                  <div className="vf-table-sub">Amount {amount?.toFixed(2) ?? "--"}</div>
+                </td>
+                <td>
+                  <div className="vf-table-title">{graph.flow_type}</div>
+                  <div className="vf-table-sub">{graph.path.join(" -> ")}</div>
+                </td>
+                <td>
+                  <div className="vf-table-title">
+                    {new Date(graph.updated_at).toLocaleDateString()}
+                  </div>
+                  <div className="vf-table-sub">
+                    {new Date(graph.updated_at).toLocaleTimeString()}
+                  </div>
+                </td>
+                <td>
+                  <span className={`vf-pill ${issueClass}`}>{issueLabel}</span>
+                </td>
+                <td>
+                  <span className={risk.className}>{risk.label}</span>
+                </td>
+                <td>
+                  <span className={status.className}>{status.label}</span>
+                </td>
+                <td className="text-right">
+                  <div className="vf-action" data-menu-id={graph.transaction_id}>
                     <button
-                      onClick={() => onSelect(graph.transaction_id)}
-                      className="rounded-lg border border-black/10 bg-white/80 px-3 py-1 text-xs font-semibold text-slate-600"
+                      type="button"
+                      className="vf-icon-button"
+                      aria-haspopup="menu"
+                      aria-expanded={openMenuId === graph.transaction_id}
+                      onClick={() =>
+                        setOpenMenuId((prev) =>
+                          prev === graph.transaction_id ? null : graph.transaction_id
+                        )
+                      }
                     >
-                      Detail
+                      <svg viewBox="0 0 24 24" role="img" aria-hidden="true">
+                        <circle cx="6" cy="12" r="1.6" fill="currentColor" />
+                        <circle cx="12" cy="12" r="1.6" fill="currentColor" />
+                        <circle cx="18" cy="12" r="1.6" fill="currentColor" />
+                      </svg>
                     </button>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-        {graphs.length === 0 && (
-          <div className="p-4 text-sm text-slate-500">No active incidents.</div>
-        )}
-      </div>
+                    {openMenuId === graph.transaction_id && (
+                      <div className="vf-menu" role="menu">
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            setOpenMenuId(null);
+                            onSelect(graph.transaction_id);
+                          }}
+                        >
+                          Details
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      {graphs.length === 0 && (
+        <div className="vf-empty">No mismatches detected yet.</div>
+      )}
     </div>
   );
 };

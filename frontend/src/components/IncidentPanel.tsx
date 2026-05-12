@@ -18,8 +18,8 @@ const IncidentPanel = ({ incidents }: IncidentPanelProps) => {
   return (
     <div className="vf-card p-4">
       <div className="mb-3 flex items-center justify-between">
-        <div className="text-sm font-semibold">Incidents</div>
-        <div className="vf-subtle">{incidents.length} active</div>
+        <div className="text-sm font-semibold">Mismatch alerts</div>
+        <div className="vf-subtle">{incidents.length} open</div>
       </div>
       <div className="max-h-[360px] space-y-3 overflow-auto pr-1">
         {incidents.map((incident) => (
@@ -39,7 +39,7 @@ const IncidentPanel = ({ incidents }: IncidentPanelProps) => {
           </div>
         ))}
         {incidents.length === 0 && (
-          <div className="text-sm text-slate-500">No incidents yet.</div>
+          <div className="text-sm text-slate-500">No mismatches yet.</div>
         )}
       </div>
     </div>
