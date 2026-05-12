@@ -354,6 +354,11 @@ and their SDK — not implemented here.
 `gateway` events for the same ids as your real PSP — disable the simulator or separate
 `transaction_id` namespaces when testing real traffic.
 
+## Roadmap (planned)
+
+- **ML-ready autocorrection:** collect labeled resolution data (incidents, graph context, operator actions, outcomes) to train models that improve **auto-suggested fixes** and **prioritization**, reducing **human-hours** on exception queues—subject to governance, audit, and human approval workflows.  
+- **Full crypto integration:** production-grade custody, chain confirmations, compliance and liquidity APIs, and deeper graph topology—beyond the current **synthetic crypto bridge** used for demos.
+
 ## Demo Tips
 
 - Use the demo buttons to force mismatches and delays

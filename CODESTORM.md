@@ -70,7 +70,9 @@ In modern distributed payment systems, reconciliation between participants (merc
 - **Reconciliation rules:** complex FX, multi-currency, fee policies, SLA metrics.  
 - **Historical analytics:** long-term storage of graphs and incidents.  
 - **Export:** SIEM, BI, alerts.  
-- **Format ingestion:** ISO 8583, ISO 20022, SWIFT, SEPA, PSP APIs, bank extracts, Kafka topics, webhooks.
+- **Format ingestion:** ISO 8583, ISO 20022, SWIFT, SEPA, PSP APIs, bank extracts, Kafka topics, webhooks.  
+- **ML-ready autocorrection:** systematic **capture of labeled resolution data** (incidents, graph context, operator actions, outcomes) to train models that **rank or propose corrections** beyond static thresholds—goal is to **cut human-hours** on exception queues while keeping human-in-the-loop for policy and audit.  
+- **Full crypto platform integration:** custodial/on-chain connectors, real chain state and confirmations, travel-rule and compliance hooks, exchange and liquidity APIs—not only the current **synthetic bridge path** for demos.
 
 ---
 

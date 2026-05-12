@@ -432,4 +432,21 @@ Merchant outgoing payout form and bridge liquidity desk—both POST `/demo/scena
 
 ---
 
+## 22. Roadmap (planned)
+
+### 22.1 ML-driven autocorrection (reduce human-hours)
+
+- **Objective:** move from rule-of-thumb `autocorrect_max_delta` and heuristics to **data-driven** suggestions on problematic transactions.  
+- **Data collection:** persist structured features per incident—graph snapshots, fee/Fx legs, participant metadata, time-to-detect, operator overrides, final ledger outcome, fraud flags (if added later)—with **privacy and retention** policies.  
+- **Modeling:** offline training on historical resolutions; online **ranking** of safe auto-fixes vs escalate; calibrated confidence and **explainability** for auditors.  
+- **Human in the loop:** ML proposes; policy engine and humans approve until trust thresholds are met.
+
+### 22.2 Full crypto integration in the platform
+
+- **Objective:** treat crypto as a **first-class production rail**, not only a simulator narrative.  
+- **Scope examples:** real custody / wallet balances, on-chain confirmation depth, mempool and reorg handling, DeFi bridge risk, exchange FIX/REST, treasury hedging, regulatory reporting.  
+- **Engineering:** hardened ingress, secrets management, non-repudiation, idempotency across chain + bank legs, and extended graph topology beyond `CRYPTO_PATH`.
+
+---
+
 *Last updated to match the repository layout and configuration as of the handbook authoring. When behavior diverges, code wins—grep `VF_` in `backend/common/config.py` and the service entrypoints.*
