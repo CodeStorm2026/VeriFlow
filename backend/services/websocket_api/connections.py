@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import orjson
 from fastapi import WebSocket
 
 
@@ -23,3 +24,6 @@ class ConnectionManager:
                 dead.add(websocket)
         for websocket in dead:
             self.disconnect(websocket)
+
+    async def broadcast_json(self, obj: dict) -> None:
+        await self.broadcast_raw(orjson.dumps(obj).decode("utf-8"))

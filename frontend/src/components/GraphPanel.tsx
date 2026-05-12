@@ -1,3 +1,4 @@
+import { memo } from "react";
 import ReactFlow, {
   Background,
   Controls,
@@ -8,7 +9,9 @@ import ReactFlow, {
 } from "reactflow";
 import "reactflow/dist/style.css";
 
-import { GraphSnapshot, NodeStatus } from "../types";
+import { graphSemanticFingerprint } from "../lib/graphFingerprint";
+import { flowLabel } from "../lib/humanize";
+import { formatPaymentRail, GraphSnapshot, NodeStatus } from "../types";
 
 const statusColor: Record<NodeStatus, string> = {
   healthy: "#16a34a",
@@ -29,15 +32,22 @@ const StatusNode = ({ data }: NodeProps) => {
       {typeof data.amount === "number" && (
         <div className="mt-2 text-xs text-slate-600">
           <div>
-            amount: <span className="font-mono">{data.amount.toFixed(2)}</span>
+            Amount <span className="font-mono">{data.amount.toFixed(2)}</span>
           </div>
           <div>
-            fee:{" "}
+            Fee{" "}
             <span className="font-mono">
               {typeof data.fee === "number" ? data.fee.toFixed(2) : "0.00"}
             </span>
           </div>
           <div className="text-[10px] uppercase tracking-wide">{data.currency}</div>
+          {Array.isArray(data.metaLines) && data.metaLines.length > 0 && (
+            <div className="mt-2 border-t border-black/5 pt-2 text-[10px] leading-relaxed text-slate-500">
+              {data.metaLines.map((line: string, i: number) => (
+                <div key={`${line}-${i}`}>{line}</div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -62,22 +72,34 @@ const GraphPanel = ({ graph }: GraphPanelProps) => {
     );
   }
 
-  const nodes = graph.nodes.map((node, index) => ({
-    id: node.id,
-    type: "status",
-    position: { x: index * 240, y: 0 },
-    data: {
-      role: node.label,
-      label: node.id,
-      amount: node.amount,
-      fee: node.fee,
-      currency: node.currency,
-    },
-    style: {
-      borderColor: statusColor[node.status],
-      boxShadow: `0 0 0 2px ${statusColor[node.status]}22`,
-    },
-  }));
+  const isCrypto = graph.flow_type === "crypto" || graph.payment_rail === "crypto_settlement";
+  const cardClass = isCrypto
+    ? "vf-card vf-grid-glow min-h-[380px] p-4 ring-2 ring-violet-400/50 bg-violet-50/50"
+    : "vf-card vf-grid-glow min-h-[380px] p-4";
+
+  const nodes = graph.nodes.map((node, index) => {
+    const sm = node.source_metadata ?? {};
+    const metaLines = Object.entries(sm)
+      .slice(0, 8)
+      .map(([k, v]) => `${k.replace(/_/g, " ")}: ${String(v)}`);
+    return {
+      id: node.id,
+      type: "status",
+      position: { x: index * 240, y: 0 },
+      data: {
+        role: node.label,
+        label: node.id,
+        amount: node.amount,
+        fee: node.fee,
+        currency: node.currency,
+        metaLines,
+      },
+      style: {
+        borderColor: statusColor[node.status],
+        boxShadow: `0 0 0 2px ${statusColor[node.status]}22`,
+      },
+    };
+  });
 
   const edges = graph.edges.map((edge) => {
     const color = statusColor[edge.status as NodeStatus] || "#64748b";
@@ -102,12 +124,22 @@ const GraphPanel = ({ graph }: GraphPanelProps) => {
   const statusClass = isComplete ? "vf-status vf-status-complete" : "vf-status vf-status-live";
 
   return (
-    <div className="vf-card vf-grid-glow min-h-[380px] p-4">
+    <div className={cardClass}>
       <div className="mb-4 flex items-center justify-between">
         <div>
-          <div className="text-xs uppercase tracking-wide text-slate-400">Live graph</div>
+          <div className="text-xs uppercase tracking-wide text-slate-400">Graph</div>
+          {isCrypto && (
+            <div className="mb-1 inline-block rounded-full bg-violet-600 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
+              Bridge
+            </div>
+          )}
+          {!isCrypto && graph.payment_rail && graph.payment_rail !== "unspecified" && (
+            <div className="mb-1 inline-block rounded-full bg-slate-600 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
+              {formatPaymentRail(graph.payment_rail)}
+            </div>
+          )}
           <div className="text-lg font-semibold">
-            {graph.transaction_id} - {graph.flow_type}
+            {graph.transaction_id} · {flowLabel(graph.flow_type)}
           </div>
           <div className="text-xs text-slate-500">
             Updated {new Date(graph.updated_at).toLocaleTimeString()}
@@ -125,4 +157,6 @@ const GraphPanel = ({ graph }: GraphPanelProps) => {
   );
 };
 
-export default GraphPanel;
+export default memo(GraphPanel, (prev, next) => {
+  return graphSemanticFingerprint(prev.graph) === graphSemanticFingerprint(next.graph);
+});

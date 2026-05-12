@@ -1,25 +1,37 @@
 import { useEffect, useState } from "react";
 
-import { GraphSnapshot, Incident } from "../types";
+import { isMismatchIncident } from "../lib/incidents";
+import { flowLabel, incidentLabel } from "../lib/humanize";
+import { formatPaymentRail, GraphSnapshot, Incident } from "../types";
 
 interface TransactionListProps {
   graphs: GraphSnapshot[];
   activeId: string | null;
   incidentByTx: Record<string, Incident | undefined>;
   onSelect: (id: string) => void;
+  /** Default 12; on the dashboard All tab you can show more */
+  maxRows?: number;
 }
 
 const typeColor: Record<string, string> = {
   amount_mismatch: "bg-rose-100 text-rose-700",
   fee_mismatch: "bg-rose-100 text-rose-700",
+  fee_policy_mismatch: "bg-purple-100 text-purple-800",
   fx_mismatch: "bg-rose-100 text-rose-700",
+  bank_ledger_autocorrect: "bg-emerald-100 text-emerald-800",
   missing_hop: "bg-red-100 text-red-700",
   delayed_event: "bg-amber-100 text-amber-700",
   duplicate_event: "bg-orange-100 text-orange-700",
   incident: "bg-slate-100 text-slate-700",
 };
 
-const TransactionList = ({ graphs, activeId, incidentByTx, onSelect }: TransactionListProps) => {
+const TransactionList = ({
+  graphs,
+  activeId,
+  incidentByTx,
+  onSelect,
+  maxRows = 12,
+}: TransactionListProps) => {
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -43,17 +55,17 @@ const TransactionList = ({ graphs, activeId, incidentByTx, onSelect }: Transacti
   };
 
   const resolveStatus = (graph: GraphSnapshot, incident?: Incident) => {
-    if (incident) {
-      return { label: "Needs action", className: "vf-status vf-status-attention" };
+    if (incident && isMismatchIncident(incident)) {
+      return { label: "Action", className: "vf-status vf-status-attention" };
     }
     const complete = graph.nodes.length > 0 && graph.nodes.every((node) => node.status !== "unknown");
     return complete
-      ? { label: "Completed", className: "vf-status vf-status-complete" }
-      : { label: "Monitoring", className: "vf-status vf-status-live" };
+      ? { label: "Done", className: "vf-status vf-status-complete" }
+      : { label: "Live", className: "vf-status vf-status-live" };
   };
 
   const resolveRisk = (incident?: Incident) => {
-    if (!incident) {
+    if (!incident || !isMismatchIncident(incident)) {
       return { label: "Normal", className: "vf-risk vf-risk-low" };
     }
     const severity = incident.severity;
@@ -81,14 +93,14 @@ const TransactionList = ({ graphs, activeId, incidentByTx, onSelect }: Transacti
           </tr>
         </thead>
         <tbody>
-          {graphs.slice(0, 12).map((graph) => {
+          {graphs.slice(0, maxRows).map((graph) => {
             const incident = incidentByTx[graph.transaction_id];
             const type = incident?.type ?? "no_issues";
             const rowActive = activeId === graph.transaction_id;
             const amount = resolveAmount(graph);
             const status = resolveStatus(graph, incident);
             const risk = resolveRisk(incident);
-            const issueLabel = incident ? type.replace(/_/g, " ") : "No anomalies";
+            const issueLabel = incident ? incidentLabel(incident.type) : "—";
             const issueClass = incident
               ? typeColor[type] || typeColor.incident
               : "bg-emerald-100 text-emerald-700";
@@ -102,8 +114,9 @@ const TransactionList = ({ graphs, activeId, incidentByTx, onSelect }: Transacti
                   <div className="vf-table-sub">Amount {amount?.toFixed(2) ?? "--"}</div>
                 </td>
                 <td>
-                  <div className="vf-table-title">{graph.flow_type}</div>
-                  <div className="vf-table-sub">{graph.path.join(" -> ")}</div>
+                  <div className="vf-table-title">{flowLabel(graph.flow_type)}</div>
+                  <div className="vf-table-sub">{graph.path.join(" → ")}</div>
+                  <div className="vf-table-sub">{formatPaymentRail(graph.payment_rail)}</div>
                 </td>
                 <td>
                   <div className="vf-table-title">
@@ -163,7 +176,7 @@ const TransactionList = ({ graphs, activeId, incidentByTx, onSelect }: Transacti
         </tbody>
       </table>
       {graphs.length === 0 && (
-        <div className="vf-empty">No mismatches detected yet.</div>
+        <div className="vf-empty">Empty.</div>
       )}
     </div>
   );

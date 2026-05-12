@@ -5,24 +5,29 @@ import random
 from datetime import timedelta
 
 from common.config import Settings
+from common.fee_settings import load_fee_settings
+from common.heartbeat import run_heartbeat_loop
 from common.injection import InjectionController
 from common.kafka import create_consumer, create_producer
 from common.log import get_logger
 from common.models import ControlCommand, ControlType, EventType, TransactionEvent
+from common.redis import create_redis
 from common.utils import new_id, now_utc
 
 
-async def _control_loop(consumer, controller: InjectionController, logger) -> None:
+async def _control_loop(consumer, controller: InjectionController, settings: Settings, logger) -> None:
     async for message in consumer:
         try:
             command = ControlCommand(**message.value)
         except Exception:
             continue
+        if command.target_node and command.target_node != settings.node_id:
+            continue
         controller.add(command)
         logger.info("control received type=%s", command.type)
 
 
-async def _event_loop(producer, consumer, controller: InjectionController, settings: Settings, logger) -> None:
+async def _event_loop(producer, consumer, controller: InjectionController, settings: Settings, redis, logger) -> None:
     async for message in consumer:
         try:
             upstream = TransactionEvent(**message.value)
@@ -41,14 +46,17 @@ async def _event_loop(producer, consumer, controller: InjectionController, setti
             delay_ms = plan.delay_ms
             await asyncio.sleep(delay_ms / 1000)
 
-        network_fee = round(max(0.5, upstream.amount * 0.005), 2)
-        amount = round(upstream.amount - network_fee, 2)
+        fee_cfg = await load_fee_settings(redis, settings)
+        rf = float(fee_cfg["crypto_network_fee_rate"])
+        fl = float(fee_cfg["crypto_network_fee_floor"])
+        network_fee = round(max(fl, upstream.amount * rf), 2)
+        # Sender (gateway) pays network fee; principal leg to FX is unchanged.
+        amount = round(upstream.amount, 2)
         fx_rate = round(random.uniform(0.98, 1.02), 4)
         converted_amount = round(amount * fx_rate, 2)
 
         if plan and plan.type == ControlType.FEE_MISMATCH:
             network_fee = round(network_fee + 0.75, 2)
-            amount = round(upstream.amount - network_fee, 2)
             converted_amount = round(amount * fx_rate, 2)
 
         metadata = dict(upstream.metadata)
@@ -59,6 +67,11 @@ async def _event_loop(producer, consumer, controller: InjectionController, setti
                 "fx_rate": fx_rate,
                 "converted_amount": converted_amount,
                 "settlement_currency": "USD",
+                "fee_model": "percent",
+                "fee_basis": "sender_gateway",
+                "fee_payer": fee_cfg["fee_payer"],
+                "network_rail": "public_chain_mock",
+                "asset_leg": "USDT",
             }
         )
 
@@ -91,6 +104,7 @@ async def run() -> None:
     settings = Settings()
     logger = get_logger(settings.service_name)
     controller = InjectionController()
+    redis = create_redis(settings)
 
     producer = await create_producer(settings)
     event_consumer = await create_consumer(
@@ -106,10 +120,12 @@ async def run() -> None:
 
     try:
         await asyncio.gather(
-            _event_loop(producer, event_consumer, controller, settings, logger),
-            _control_loop(control_consumer, controller, logger),
+            _event_loop(producer, event_consumer, controller, settings, redis, logger),
+            _control_loop(control_consumer, controller, settings, logger),
+            run_heartbeat_loop(redis, settings.node_id, settings.heartbeat_interval_sec),
         )
     finally:
         await event_consumer.stop()
         await control_consumer.stop()
         await producer.stop()
+        await redis.close()

@@ -4,6 +4,9 @@ import asyncio
 from datetime import timedelta
 
 from common.config import Settings
+from common.fee_settings import load_fee_settings
+from common.heartbeat import run_heartbeat_loop
+from common.redis import create_redis
 from common.injection import InjectionController
 from common.kafka import create_consumer, create_producer
 from common.log import get_logger
@@ -12,19 +15,21 @@ from common.utils import new_id, now_utc
 
 
 async def _control_loop(
-    consumer, controller: InjectionController, logger
+    consumer, controller: InjectionController, settings: Settings, logger
 ) -> None:
     async for message in consumer:
         try:
             command = ControlCommand(**message.value)
         except Exception:
             continue
+        if command.target_node and command.target_node != settings.node_id:
+            continue
         controller.add(command)
         logger.info("control received type=%s", command.type)
 
 
 async def _event_loop(
-    producer, consumer, controller: InjectionController, settings: Settings, logger
+    producer, consumer, controller: InjectionController, settings: Settings, redis, logger
 ) -> None:
     async for message in consumer:
         try:
@@ -43,16 +48,26 @@ async def _event_loop(
             delay_ms = plan.delay_ms
             await asyncio.sleep(delay_ms / 1000)
 
-        fee = round(upstream.amount * 0.02, 2)
-        amount = round(upstream.amount + fee, 2)
+        fee_cfg = await load_fee_settings(redis, settings)
+        fee_model = str(fee_cfg["gateway_fee_model"]).lower()
+        if fee_model == "fixed":
+            fee = round(float(fee_cfg["gateway_fixed_fee"]), 2)
+        else:
+            fee = round(upstream.amount * float(fee_cfg["gateway_fee_rate"]), 2)
+        # Sender (merchant) pays fee: principal to next hop equals merchant amount.
+        amount = round(upstream.amount, 2)
         if plan and plan.type == ControlType.FEE_MISMATCH:
             fee = round(fee + 1.5, 2)
-            amount = round(amount + 1.5, 2)
 
         metadata = dict(upstream.metadata)
         metadata.update({
             "source_event_id": upstream.event_id,
-            "fee_rate": 0.02,
+            "fee_model": fee_model,
+            "fee_rate": float(fee_cfg["gateway_fee_rate"]),
+            "fixed_fee": float(fee_cfg["gateway_fixed_fee"]),
+            "fee_basis": "sender_merchant",
+            "fee_payer": fee_cfg["fee_payer"],
+            "policy_max_bank_fee_vs_gateway": float(fee_cfg["policy_max_bank_fee_vs_gateway"]),
         })
 
         event_timestamp = now_utc() - timedelta(milliseconds=delay_ms)
@@ -84,6 +99,7 @@ async def run() -> None:
     settings = Settings()
     logger = get_logger(settings.service_name)
     controller = InjectionController()
+    redis = create_redis(settings)
 
     producer = await create_producer(settings)
     event_consumer = await create_consumer(
@@ -99,10 +115,12 @@ async def run() -> None:
 
     try:
         await asyncio.gather(
-            _event_loop(producer, event_consumer, controller, settings, logger),
-            _control_loop(control_consumer, controller, logger),
+            _event_loop(producer, event_consumer, controller, settings, redis, logger),
+            _control_loop(control_consumer, controller, settings, logger),
+            run_heartbeat_loop(redis, settings.node_id, settings.heartbeat_interval_sec),
         )
     finally:
         await event_consumer.stop()
         await control_consumer.stop()
         await producer.stop()
+        await redis.close()

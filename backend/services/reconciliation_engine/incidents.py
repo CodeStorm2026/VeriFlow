@@ -53,8 +53,15 @@ def node_status_from_incident(incident: Incident) -> NodeStatus:
         return NodeStatus.DELAYED
     if incident.type == IncidentType.DUPLICATE_EVENT:
         return NodeStatus.DUPLICATE
-    if incident.type in {IncidentType.AMOUNT_MISMATCH, IncidentType.FEE_MISMATCH, IncidentType.FX_MISMATCH}:
+    if incident.type in {
+        IncidentType.AMOUNT_MISMATCH,
+        IncidentType.FEE_MISMATCH,
+        IncidentType.FEE_POLICY_MISMATCH,
+        IncidentType.FX_MISMATCH,
+    }:
         return NodeStatus.MISMATCH
+    if incident.type == IncidentType.BANK_LEDGER_AUTOCORRECT:
+        return NodeStatus.HEALTHY
     if incident.type == IncidentType.MISSING_HOP:
         return NodeStatus.MISSING
     return NodeStatus.UNKNOWN

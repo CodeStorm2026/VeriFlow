@@ -9,8 +9,8 @@ const ReplayControls = ({ isReplaying, bufferSize, onReplay, onStop }: ReplayCon
   return (
     <div className="vf-card flex items-center justify-between p-4">
       <div>
-        <div className="text-sm font-semibold">Replay mode</div>
-        <div className="vf-subtle">Buffered snapshots: {bufferSize}</div>
+        <div className="text-sm font-semibold">Replay</div>
+        <div className="vf-subtle">Buf {bufferSize}</div>
       </div>
       <div className="flex gap-2">
         {!isReplaying ? (

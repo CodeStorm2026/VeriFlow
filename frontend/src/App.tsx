@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Navigate,
   NavLink,
@@ -6,12 +6,27 @@ import {
   Routes,
   useLocation,
   useNavigate,
-  useParams,
 } from "react-router-dom";
 
+import AccessPage from "./pages/AccessPage";
 import DashboardPage from "./pages/DashboardPage";
-import TransactionDetailPage from "./pages/TransactionDetailPage";
+import ReconciliationPage from "./pages/modules/ReconciliationPage";
+import ReportsPage from "./pages/modules/ReportsPage";
+import ReversalsPage from "./pages/modules/ReversalsPage";
+import PortalPage from "./pages/modules/PortalPage";
+import SettlementPage from "./pages/modules/SettlementPage";
+import SettingsPage from "./pages/modules/SettingsPage";
+import TransactionDetailOutlet from "./pages/TransactionDetailOutlet";
+import MismatchChart from "./components/MismatchChart";
+import SourceHealthBar from "./components/SourceHealthBar";
+import OpsMetricsCharts from "./components/OpsMetricsCharts";
+import { usePersona } from "./context/PersonaContext";
+import { VeriFlowRuntimeProvider } from "./context/VeriFlowRuntimeContext";
+import { isMismatchIncident, MISMATCH_TYPES } from "./lib/incidents";
+import { MODULE_PATHS, sidebarGeneralItems, sidebarSettingsItems } from "./nav/routesConfig";
+import { resolveApiBaseUrl, resolveWebSocketUrl } from "./lib/veriflowEndpoints";
 import { connectWebSocket } from "./lib/ws";
+import { graphSemanticFingerprint } from "./lib/graphFingerprint";
 import {
   GraphSnapshot,
   Incident,
@@ -20,18 +35,10 @@ import {
   WsMessage,
 } from "./types";
 
-const wsUrl = import.meta.env.VITE_WS_URL || "ws://localhost:8001/ws";
-const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:8001";
 const MAX_GRAPHS = 60;
-const DETAIL_RENDER_INTERVAL_MS = 15000;
+const DETAIL_GRAPH_MIN_INTERVAL_MS = 3500;
 const INCIDENT_TTL_MS = 15 * 60 * 1000;
-const MISMATCH_DISPLAY_INTERVAL_MS = 150000;
 const DEMO_BOOST_WINDOW_MS = 120000;
-const MISMATCH_TYPES = new Set<string>([
-  "amount_mismatch",
-  "fee_mismatch",
-  "fx_mismatch",
-]);
 
 const isGraphComplete = (snapshot: GraphSnapshot | null): boolean => {
   if (!snapshot || snapshot.nodes.length === 0) {
@@ -40,34 +47,26 @@ const isGraphComplete = (snapshot: GraphSnapshot | null): boolean => {
   return snapshot.nodes.every((node) => node.status !== "unknown");
 };
 
-const isMismatchIncident = (incident: Incident): boolean => {
-  return MISMATCH_TYPES.has(incident.type);
-};
-
-const graphFingerprint = (snapshot: GraphSnapshot | null): string => {
-  if (!snapshot) {
-    return "";
-  }
-  const nodeKey = snapshot.nodes
-    .map((node) =>
-      `${node.id}:${node.status}:${node.amount ?? ""}:${node.fee ?? ""}:${node.currency ?? ""}`
-    )
-    .join("|");
-  const edgeKey = snapshot.edges
-    .map((edge) => `${edge.id}:${edge.status}:${edge.animated ? "1" : "0"}`)
-    .join("|");
-  return `${snapshot.transaction_id}::${nodeKey}::${edgeKey}`;
-};
-
 const App = () => {
+  const apiUrl = useMemo(() => resolveApiBaseUrl(), []);
+  const wsUrl = useMemo(() => resolveWebSocketUrl(), []);
+
   const [graphs, setGraphs] = useState<Record<string, GraphSnapshot>>({});
   const [activeTx, setActiveTx] = useState<string | null>(null);
   const [displayGraph, setDisplayGraph] = useState<GraphSnapshot | null>(null);
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
   const [series, setSeries] = useState<MetricSeries[]>([]);
+  const [escalationByIncident, setEscalationByIncident] = useState<
+    Record<string, { deadline_ms: number; transaction_id: string; severity?: string }>
+  >({});
+  const [sourceHealth, setSourceHealth] = useState<
+    Record<string, { status: string; age_ms?: number | null }>
+  >({});
   const [replayMode, setReplayMode] = useState(false);
-  const [visibleMismatchIds, setVisibleMismatchIds] = useState<string[]>([]);
+  const [resolutionLog, setResolutionLog] = useState<
+    { transaction_id: string; kind: "mock_correction" | "bank_autocorrect"; summary: string; at_ms: number }[]
+  >([]);
   const replayTimer = useRef<number | null>(null);
   const replayBuffer = useRef<Record<string, GraphSnapshot[]>>({});
   const replayModeRef = useRef(false);
@@ -75,16 +74,17 @@ const App = () => {
   const lastGraphUpdateRef = useRef(0);
   const completedTxRef = useRef<Set<string>>(new Set());
   const displayFingerprintRef = useRef("");
-  const visibleMismatchRef = useRef<string[]>([]);
-  const pendingMismatchRef = useRef<string[]>([]);
-  const pendingMismatchSetRef = useRef<Set<string>>(new Set());
+  const incidentsRef = useRef<Incident[]>([]);
   const demoBoostUntilRef = useRef(0);
   const isDetailRef = useRef(false);
   const pinnedTxRef = useRef<Set<string>>(new Set());
+  const graphsRef = useRef<Record<string, GraphSnapshot>>({});
   const navigate = useNavigate();
   const location = useLocation();
+  const { persona, merchantDisplayName, bridgeDisplayName } = usePersona();
   const isDetailRoute = location.pathname.startsWith("/tx/");
   isDetailRef.current = isDetailRoute;
+  graphsRef.current = graphs;
 
   useEffect(() => {
     replayModeRef.current = replayMode;
@@ -95,55 +95,12 @@ const App = () => {
   }, [activeTx]);
 
   useEffect(() => {
-    visibleMismatchRef.current = visibleMismatchIds;
-  }, [visibleMismatchIds]);
+    incidentsRef.current = incidents;
+  }, [incidents]);
 
   useEffect(() => {
-    displayFingerprintRef.current = graphFingerprint(displayGraph);
+    displayFingerprintRef.current = graphSemanticFingerprint(displayGraph);
   }, [displayGraph]);
-
-  const addVisibleMismatch = (txId: string) => {
-    setVisibleMismatchIds((prev) => {
-      if (prev.includes(txId)) {
-        return prev;
-      }
-      return [txId, ...prev].slice(0, MAX_GRAPHS);
-    });
-  };
-
-  const queueMismatchTx = (txId: string, immediate: boolean) => {
-    if (visibleMismatchRef.current.includes(txId)) {
-      return;
-    }
-    if (immediate) {
-      addVisibleMismatch(txId);
-      return;
-    }
-    if (!pendingMismatchSetRef.current.has(txId)) {
-      pendingMismatchRef.current.push(txId);
-      pendingMismatchSetRef.current.add(txId);
-    }
-  };
-
-  const flushMismatchQueue = () => {
-    const pending = pendingMismatchRef.current.splice(0, pendingMismatchRef.current.length);
-    if (pending.length === 0) {
-      return;
-    }
-    pendingMismatchSetRef.current.clear();
-    setVisibleMismatchIds((prev) => {
-      const seen = new Set(prev);
-      const next = [...prev];
-      for (let index = pending.length - 1; index >= 0; index -= 1) {
-        const txId = pending[index];
-        if (!seen.has(txId)) {
-          next.unshift(txId);
-          seen.add(txId);
-        }
-      }
-      return next.slice(0, MAX_GRAPHS);
-    });
-  };
 
   useEffect(() => {
     const nextPinned = new Set<string>(
@@ -167,26 +124,25 @@ const App = () => {
   }, []);
 
   useEffect(() => {
-    const timer = window.setInterval(() => {
-      if (Date.now() < demoBoostUntilRef.current) {
-        return;
-      }
-      const nextId = pendingMismatchRef.current.shift();
-      if (!nextId) {
-        return;
-      }
-      pendingMismatchSetRef.current.delete(nextId);
-      addVisibleMismatch(nextId);
-    }, MISMATCH_DISPLAY_INTERVAL_MS);
-    return () => window.clearInterval(timer);
-  }, []);
-
-  useEffect(() => {
     const socket = connectWebSocket(wsUrl, (message: WsMessage) => {
       if (message.type === "bootstrap") {
-        const bootstrapGraphs = message.payload.graphs as GraphSnapshot[];
-        const bootstrapIncidents = message.payload.incidents as Incident[];
-        const bootstrapMetrics = message.payload.metrics as MetricsSnapshot;
+        const bootstrapPayload = message.payload as {
+          graphs: GraphSnapshot[];
+          incidents: Incident[];
+          metrics: MetricsSnapshot;
+          escalations?: {
+            incident_id: string;
+            transaction_id: string;
+            deadline_ms: number;
+            severity?: string;
+          }[];
+          source_health?: {
+            nodes: Record<string, { status: string; age_ms?: number | null }>;
+          };
+        };
+        const bootstrapGraphs = bootstrapPayload.graphs;
+        const bootstrapIncidents = bootstrapPayload.incidents;
+        const bootstrapMetrics = bootstrapPayload.metrics;
 
         const initialGraphs = Object.fromEntries(
           bootstrapGraphs.map((graph) => [graph.transaction_id, graph])
@@ -194,6 +150,22 @@ const App = () => {
         setGraphs(trimGraphs(initialGraphs, MAX_GRAPHS, pinnedTxRef.current));
         setIncidents(pruneIncidents(bootstrapIncidents, INCIDENT_TTL_MS));
         setMetrics(bootstrapMetrics);
+        if (bootstrapPayload.source_health?.nodes) {
+          setSourceHealth(bootstrapPayload.source_health.nodes);
+        }
+        if (bootstrapPayload.escalations?.length) {
+          setEscalationByIncident((prev) => {
+            const next = { ...prev };
+            for (const e of bootstrapPayload.escalations!) {
+              next[e.incident_id] = {
+                deadline_ms: e.deadline_ms,
+                transaction_id: e.transaction_id,
+                severity: e.severity,
+              };
+            }
+            return next;
+          });
+        }
         const mismatchIds = Array.from(
           new Set(
             bootstrapIncidents
@@ -201,9 +173,6 @@ const App = () => {
               .map((incident) => incident.transaction_id)
           )
         );
-        setVisibleMismatchIds(mismatchIds.slice(0, MAX_GRAPHS));
-        pendingMismatchRef.current = [];
-        pendingMismatchSetRef.current.clear();
         if (!activeTxRef.current && mismatchIds.length > 0 && !isDetailRef.current) {
           setActiveTx(mismatchIds[0]);
         }
@@ -235,22 +204,15 @@ const App = () => {
 
         if (!replayModeRef.current && isActive && isDetailRef.current) {
           const now = Date.now();
-          const fingerprint = graphFingerprint(snapshot);
+          const fingerprint = graphSemanticFingerprint(snapshot);
           if (fingerprint === displayFingerprintRef.current) {
             return;
           }
-          if (isComplete) {
-            setDisplayGraph(snapshot);
-            lastGraphUpdateRef.current = now;
+          if (now - lastGraphUpdateRef.current < DETAIL_GRAPH_MIN_INTERVAL_MS) {
             return;
           }
-          if (completedTxRef.current.has(snapshot.transaction_id)) {
-            return;
-          }
-          if (now - lastGraphUpdateRef.current >= DETAIL_RENDER_INTERVAL_MS) {
-            setDisplayGraph(snapshot);
-            lastGraphUpdateRef.current = now;
-          }
+          setDisplayGraph(snapshot);
+          lastGraphUpdateRef.current = now;
         }
         return;
       }
@@ -259,11 +221,22 @@ const App = () => {
         const incident = message.payload as Incident;
         setIncidents((prev) => addIncident(prev, incident, INCIDENT_TTL_MS));
         if (isMismatchIncident(incident)) {
-          const immediate = Date.now() < demoBoostUntilRef.current;
-          queueMismatchTx(incident.transaction_id, immediate);
           if (!activeTxRef.current && !isDetailRef.current) {
             setActiveTx(incident.transaction_id);
           }
+        }
+        if (incident.type === "bank_ledger_autocorrect") {
+          setResolutionLog((prev) =>
+            [
+              {
+                transaction_id: incident.transaction_id,
+                kind: "bank_autocorrect",
+                summary: incident.message,
+                at_ms: Date.now(),
+              },
+              ...prev,
+            ].slice(0, 80)
+          );
         }
         return;
       }
@@ -279,15 +252,75 @@ const App = () => {
               tx_per_sec: snapshot.tx_per_sec,
               mismatch_rate: snapshot.mismatch_rate,
               reconciliation_latency_ms: snapshot.reconciliation_latency_ms,
+              active_incidents: snapshot.active_incidents,
+              events_in_window: snapshot.events_in_window,
             },
           ];
-          return next.slice(-30);
+          return next.slice(-60);
         });
+        return;
+      }
+
+      if (message.type === "escalation_pending") {
+        const p = message.payload as {
+          incident_id: string;
+          transaction_id: string;
+          deadline_ms: number;
+          severity?: string;
+        };
+        setEscalationByIncident((prev) => ({ ...prev, [p.incident_id]: p }));
+        return;
+      }
+
+      if (message.type === "escalation_due") {
+        const p = message.payload as { incident_id: string };
+        setEscalationByIncident((prev) => {
+          const next = { ...prev };
+          delete next[p.incident_id];
+          return next;
+        });
+        return;
+      }
+
+      if (message.type === "source_health") {
+        const p = message.payload as {
+          nodes: Record<string, { status: string; age_ms?: number | null }>;
+        };
+        setSourceHealth(p.nodes);
+        return;
+      }
+
+      if (message.type === "correction") {
+        const entry = message.payload as {
+          transaction_id?: string;
+          node_id?: string;
+          delta_amount?: number;
+          auto_eligible?: boolean;
+          recorded_at_ms?: number;
+        };
+        const tid = entry.transaction_id?.trim();
+        if (tid) {
+          const summary = `Mock correction: Δ ${entry.delta_amount ?? "?"} @ ${entry.node_id ?? "?"}${
+            entry.auto_eligible ? " (auto band)" : ""
+          }`;
+          setResolutionLog((prev) =>
+            [
+              {
+                transaction_id: tid,
+                kind: "mock_correction",
+                summary,
+                at_ms: entry.recorded_at_ms ?? Date.now(),
+              },
+              ...prev,
+            ].slice(0, 80)
+          );
+        }
+        return;
       }
     });
 
     return () => socket.close();
-  }, []);
+  }, [wsUrl]);
 
   useEffect(() => {
     if (replayMode || !isDetailRoute) {
@@ -319,26 +352,98 @@ const App = () => {
     return map;
   }, [mismatchIncidents]);
 
-  const visibleMismatchSet = useMemo(() => {
-    return new Set(visibleMismatchIds);
-  }, [visibleMismatchIds]);
+  const primaryIncidentByTx = useMemo(() => {
+    const map: Record<string, Incident | undefined> = {};
+    for (const incident of incidents) {
+      if (!map[incident.transaction_id]) {
+        map[incident.transaction_id] = incident;
+      }
+    }
+    return map;
+  }, [incidents]);
+
+  const incompleteGraphs = useMemo(() => {
+    return sortedGraphs.filter((g) => !isGraphComplete(g));
+  }, [sortedGraphs]);
 
   const mismatchGraphs = useMemo(() => {
-    return sortedGraphs.filter(
-      (graph) =>
-        mismatchByTx[graph.transaction_id] && visibleMismatchSet.has(graph.transaction_id)
-    );
-  }, [sortedGraphs, mismatchByTx, visibleMismatchSet]);
+    return sortedGraphs.filter((graph) => mismatchByTx[graph.transaction_id]);
+  }, [sortedGraphs, mismatchByTx]);
 
-  const visibleMismatchIncidents = useMemo(() => {
-    return mismatchIncidents.filter((incident) =>
-      visibleMismatchSet.has(incident.transaction_id)
-    );
-  }, [mismatchIncidents, visibleMismatchSet]);
+  const visibleMismatchIncidents = mismatchIncidents;
 
+  const mismatchMinuteBuckets = useMemo(() => {
+    const map = new Map<number, number>();
+    for (const inc of incidents) {
+      if (!MISMATCH_TYPES.has(inc.type)) {
+        continue;
+      }
+      const t = Date.parse(inc.timestamp);
+      if (!Number.isFinite(t)) {
+        continue;
+      }
+      const slot = Math.floor(t / 60000);
+      map.set(slot, (map.get(slot) ?? 0) + 1);
+    }
+    return [...map.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .slice(-12)
+      .map(([slot, count]) => ({
+        minute: new Date(slot * 60000).toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+        }),
+        count,
+      }));
+  }, [incidents]);
 
-  const startReplay = () => {
-    const txId = activeTxRef.current ?? activeTx;
+  const bannerIncident = visibleMismatchIncidents[0];
+  const bannerSla = bannerIncident
+    ? escalationByIncident[bannerIncident.incident_id]
+    : undefined;
+
+  const deskRedirect =
+    persona === "bridge" ? MODULE_PATHS.portalCrypto : MODULE_PATHS.portalMerchant;
+
+  const handleImmediateEscalate = async () => {
+    if (!bannerIncident) {
+      return;
+    }
+    try {
+      await fetch(`${apiUrl}/escalations/immediate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          incident_id: bannerIncident.incident_id,
+          transaction_id: bannerIncident.transaction_id,
+        }),
+      });
+    } catch {
+      // ignore network errors in demo
+    }
+  };
+
+  const handleBack = useCallback(() => {
+    navigate("/");
+  }, [navigate]);
+
+  const stopReplay = useCallback(() => {
+    if (replayTimer.current) {
+      window.clearInterval(replayTimer.current);
+    }
+    replayTimer.current = null;
+    setReplayMode(false);
+    const txId = activeTxRef.current;
+    if (txId && isDetailRef.current) {
+      const latest = graphsRef.current[txId];
+      if (latest) {
+        setDisplayGraph(latest);
+      }
+    }
+  }, []);
+
+  const startReplay = useCallback(() => {
+    const txId = activeTxRef.current;
     if (!txId) {
       return;
     }
@@ -355,32 +460,20 @@ const App = () => {
         stopReplay();
       }
     }, 350);
-  };
+  }, [stopReplay]);
 
-  const stopReplay = () => {
-    if (replayTimer.current) {
-      window.clearInterval(replayTimer.current);
-    }
-    replayTimer.current = null;
-    setReplayMode(false);
-    if (activeTx && graphs[activeTx] && isDetailRoute) {
-      setDisplayGraph(graphs[activeTx]);
-    }
-  };
+  const handleSelect = useCallback(
+    (id: string) => {
+      setActiveTx(id);
+      if (!replayModeRef.current && graphsRef.current[id]) {
+        setDisplayGraph(graphsRef.current[id]!);
+      }
+      navigate(`/tx/${id}`);
+    },
+    [navigate]
+  );
 
-  const handleSelect = (id: string) => {
-    setActiveTx(id);
-    if (!replayMode && graphs[id]) {
-      setDisplayGraph(graphs[id]);
-    }
-    navigate(`/tx/${id}`);
-  };
-
-  const handleBack = () => {
-    navigate("/");
-  };
-
-  const loadHistory = async (txId: string) => {
+  const loadHistory = useCallback(async (txId: string) => {
     if (!txId) {
       return;
     }
@@ -411,58 +504,42 @@ const App = () => {
     } catch (err) {
       // Ignore history fetch failures.
     }
-  };
+  }, [apiUrl]);
 
-  const DetailRoute = () => {
-    const { id } = useParams();
-    const txId = id ?? "";
+  const mismatchAnalysisIncidents = useMemo(() => {
+    return incidents
+      .filter((i: Incident) => isMismatchIncident(i))
+      .sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+  }, [incidents]);
 
-    useEffect(() => {
-      if (!id) {
-        navigate("/");
-        return;
-      }
-      setActiveTx(id);
-      setDisplayGraph(graphs[id] ?? null);
-      lastGraphUpdateRef.current = 0;
-      loadHistory(id);
-    }, [id, navigate]);
+  const recentGraphs = useMemo((): GraphSnapshot[] => {
+    return Object.values(graphs)
+      .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+      .slice(0, 24);
+  }, [graphs]);
 
-    const bufferSize = txId ? (replayBuffer.current[txId]?.length ?? 0) : 0;
-    const currentGraph =
-      displayGraph && displayGraph.transaction_id === txId
-        ? displayGraph
-        : graphs[txId] ?? null;
-
-    return (
-      <TransactionDetailPage
-        txId={txId}
-        graph={currentGraph}
-        replayMode={replayMode}
-        bufferSize={bufferSize}
-        onReplay={startReplay}
-        onStop={stopReplay}
-        onBack={handleBack}
-      />
-    );
-  };
-
-  type NavItem = { label: string; to?: string; badge?: string };
-  type SettingsItem = { label: string };
-
-  const navItems: NavItem[] = [
-    { label: "Dashboard", to: "/" },
-    { label: "Payment Reversal Manager" },
-    { label: "Reconciliation System", badge: "AI" },
-    { label: "Fraud & Risk Monitoring" },
-    { label: "Reports & Analytics" },
-  ];
-
-  const settingsItems: SettingsItem[] = [
-    { label: "System Settings" },
-    { label: "Help & Support" },
-    { label: "System Status" },
-  ];
+  const moduleRuntimeValue = useMemo(
+    () => ({
+      apiUrl,
+      metrics,
+      series,
+      mismatchMinuteBuckets,
+      mismatchIncidents: mismatchAnalysisIncidents,
+      recentGraphs,
+      sourceHealth,
+      onOpenTransaction: handleSelect,
+    }),
+    [
+      apiUrl,
+      metrics,
+      series,
+      mismatchMinuteBuckets,
+      mismatchAnalysisIncidents,
+      recentGraphs,
+      sourceHealth,
+      handleSelect,
+    ]
+  );
 
   return (
     <div className="vf-shell">
@@ -471,44 +548,42 @@ const App = () => {
           <div className="vf-logo">V</div>
           <div>
             <div className="vf-brand-title">VeriFlow</div>
-            <div className="vf-brand-sub">Workspace</div>
+            <div className="vf-brand-sub">FX / crypto rails</div>
           </div>
         </div>
         <div className="vf-nav-section">
           <div className="vf-nav-title">General</div>
           <nav className="vf-nav">
-            {navItems.map((item) =>
-              item.to ? (
-                <NavLink
-                  key={item.label}
-                  to={item.to}
-                  end
-                  className={({ isActive }: { isActive: boolean }) =>
-                    `vf-nav-item ${isActive ? "vf-nav-item-active" : ""}`
-                  }
-                >
-                  <span className="vf-nav-dot" aria-hidden="true" />
-                  <span>{item.label}</span>
-                  {item.badge ? <span className="vf-nav-badge">{item.badge}</span> : null}
-                </NavLink>
-              ) : (
-                <div key={item.label} className="vf-nav-item vf-nav-item-disabled">
-                  <span className="vf-nav-dot" aria-hidden="true" />
-                  <span>{item.label}</span>
-                  {item.badge ? <span className="vf-nav-badge">{item.badge}</span> : null}
-                </div>
-              )
-            )}
+            {sidebarGeneralItems(persona).map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                end={item.to === "/"}
+                className={({ isActive }: { isActive: boolean }) =>
+                  `vf-nav-item ${isActive ? "vf-nav-item-active" : ""}`
+                }
+              >
+                <span className="vf-nav-dot" aria-hidden="true" />
+                <span>{item.label}</span>
+                {item.badge ? <span className="vf-nav-badge">{item.badge}</span> : null}
+              </NavLink>
+            ))}
           </nav>
         </div>
         <div className="vf-nav-section">
           <div className="vf-nav-title">Settings</div>
           <nav className="vf-nav">
-            {settingsItems.map((item) => (
-              <div key={item.label} className="vf-nav-item vf-nav-item-disabled">
+            {sidebarSettingsItems(persona).map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                className={({ isActive }: { isActive: boolean }) =>
+                  `vf-nav-item ${isActive ? "vf-nav-item-active" : ""}`
+                }
+              >
                 <span className="vf-nav-dot" aria-hidden="true" />
                 <span>{item.label}</span>
-              </div>
+              </NavLink>
             ))}
           </nav>
         </div>
@@ -516,8 +591,16 @@ const App = () => {
           <div className="vf-user-chip">
             <div className="vf-user-avatar">A</div>
             <div>
-              <div className="vf-user-name">Admin</div>
-              <div className="vf-user-email">admin@veriflow.com</div>
+              <div className="vf-user-name">
+                {persona === "operator"
+                  ? "Operator"
+                  : persona === "merchant"
+                    ? merchantDisplayName
+                    : bridgeDisplayName}
+              </div>
+              <NavLink to={MODULE_PATHS.access} className="vf-user-email hover:underline">
+                Account
+              </NavLink>
             </div>
           </div>
         </div>
@@ -542,16 +625,16 @@ const App = () => {
             </svg>
             <input
               type="search"
-              placeholder="Find transactions by ID, customer, or amount"
+              placeholder="Tx id"
             />
           </label>
           <div className="vf-topbar-actions">
             <div className="vf-topbar-meta">
-              <div className="vf-topbar-label">Mismatch queue</div>
+              <div className="vf-topbar-label">Queue</div>
               <div className="vf-topbar-value">
                 {mismatchGraphs.length > 0
                   ? `${mismatchGraphs.length} open`
-                  : "No mismatches"}
+                  : "Clear"}
               </div>
             </div>
             <button type="button" className="vf-icon-button" aria-label="Notifications">
@@ -577,29 +660,105 @@ const App = () => {
           </div>
         </header>
         <main className="vf-content">
-          <Routes>
+          <VeriFlowRuntimeProvider value={moduleRuntimeValue}>
+            <Routes>
             <Route
               path="/"
               element={
-                <DashboardPage
-                  graphs={mismatchGraphs}
-                  activeId={activeTx}
-                  incidentByTx={mismatchByTx}
-                  metrics={metrics}
-                  series={series}
-                  incidents={visibleMismatchIncidents}
+                persona === "merchant" ? (
+                  <Navigate to={MODULE_PATHS.portalMerchant} replace />
+                ) : persona === "bridge" ? (
+                  <Navigate to={MODULE_PATHS.portalCrypto} replace />
+                ) : (
+                  <DashboardPage
+                    graphs={mismatchGraphs}
+                    allGraphs={sortedGraphs.slice(0, 48)}
+                    incompleteGraphs={incompleteGraphs}
+                    resolutionLog={resolutionLog}
+                    activeId={activeTx}
+                    incidentByTx={mismatchByTx}
+                    primaryIncidentByTx={primaryIncidentByTx}
+                    metrics={metrics}
+                    series={series}
+                    incidents={incidents.slice(0, 40)}
+                    apiUrl={apiUrl}
+                    onSelect={handleSelect}
+                    onManualDemo={() => {
+                      demoBoostUntilRef.current = Date.now() + DEMO_BOOST_WINDOW_MS;
+                    }}
+                    onDemoScenarioQueued={(id) => {
+                      demoBoostUntilRef.current = Date.now() + DEMO_BOOST_WINDOW_MS;
+                      handleSelect(id);
+                    }}
+                    bannerIncident={bannerIncident}
+                    bannerSla={bannerSla}
+                    onEscalateNow={handleImmediateEscalate}
+                    mismatchMinuteBuckets={mismatchMinuteBuckets}
+                    sourceHealth={sourceHealth}
+                  />
+                )
+              }
+            />
+            <Route path={MODULE_PATHS.access} element={<AccessPage />} />
+            <Route
+              path="/tx/:id"
+              element={
+                <TransactionDetailOutlet
+                  graphs={graphs}
+                  displayGraph={displayGraph}
+                  setActiveTx={setActiveTx}
+                  setDisplayGraph={setDisplayGraph}
+                  replayMode={replayMode}
+                  replayBuffer={replayBuffer}
+                  lastGraphUpdateRef={lastGraphUpdateRef}
                   apiUrl={apiUrl}
-                  onSelect={handleSelect}
-                  onManualDemo={() => {
-                    demoBoostUntilRef.current = Date.now() + DEMO_BOOST_WINDOW_MS;
-                    flushMismatchQueue();
-                  }}
+                  onReplay={startReplay}
+                  onStop={stopReplay}
+                  onBack={handleBack}
+                  loadHistory={loadHistory}
                 />
               }
             />
-            <Route path="/tx/:id" element={<DetailRoute />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
+            <Route path={MODULE_PATHS.portalMerchant} element={<PortalPage role="merchant" />} />
+            <Route path={MODULE_PATHS.portalCrypto} element={<PortalPage role="crypto" />} />
+            <Route
+              path={MODULE_PATHS.reversals}
+              element={
+                persona === "operator" ? (
+                  <ReversalsPage />
+                ) : (
+                  <Navigate to={deskRedirect} replace />
+                )
+              }
+            />
+            <Route
+              path={MODULE_PATHS.reconciliation}
+              element={
+                persona === "operator" ? (
+                  <ReconciliationPage />
+                ) : (
+                  <Navigate to={deskRedirect} replace />
+                )
+              }
+            />
+            <Route
+              path={MODULE_PATHS.settlement}
+              element={
+                persona === "operator" ? (
+                  <SettlementPage />
+                ) : (
+                  <Navigate to={deskRedirect} replace />
+                )
+              }
+            />
+            <Route path={MODULE_PATHS.reports} element={<ReportsPage />} />
+            <Route path={MODULE_PATHS.settings} element={<SettingsPage />} />
+            <Route
+              path="*"
+              element={<Navigate to={persona === "operator" ? "/" : deskRedirect} replace />}
+            />
           </Routes>
+          </VeriFlowRuntimeProvider>
         </main>
       </div>
     </div>

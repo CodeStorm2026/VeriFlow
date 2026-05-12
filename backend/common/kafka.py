@@ -10,7 +10,7 @@ from .config import Settings
 
 def _serialize(value: Any) -> bytes:
     if hasattr(value, "model_dump"):
-        return orjson.dumps(value.model_dump())
+        return orjson.dumps(value.model_dump(mode="json"))
     return orjson.dumps(value)
 
 

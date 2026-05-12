@@ -7,16 +7,17 @@ import orjson
 from common.config import Settings
 from common.kafka import create_consumer
 from common.log import get_logger
+from common.escalation import schedule_escalation_if_needed
 from common.models import TransactionEvent
 from common.redis import create_redis
 from .store import TransactionStore
 
 
 async def publish_graph(redis, snapshot, settings: Settings) -> None:
-    payload = {"type": "graph", "payload": snapshot.model_dump()}
+    payload = {"type": "graph", "payload": snapshot.model_dump(mode="json")}
     data = orjson.dumps(payload).decode("utf-8")
     history_key = f"vf:history:{snapshot.transaction_id}"
-    history_data = orjson.dumps(snapshot.model_dump()).decode("utf-8")
+    history_data = orjson.dumps(snapshot.model_dump(mode="json")).decode("utf-8")
     await redis.publish("vf.graph", data)
     await redis.set(f"vf:graph:{snapshot.transaction_id}", data)
     await redis.rpush(history_key, history_data)
@@ -26,7 +27,7 @@ async def publish_graph(redis, snapshot, settings: Settings) -> None:
 
 
 async def publish_incident(redis, incident, settings: Settings) -> None:
-    payload = {"type": "incident", "payload": incident.model_dump()}
+    payload = {"type": "incident", "payload": incident.model_dump(mode="json")}
     data = orjson.dumps(payload).decode("utf-8")
     await redis.publish("vf.incident", data)
     await redis.lpush("vf:incidents", data)
@@ -34,7 +35,7 @@ async def publish_incident(redis, incident, settings: Settings) -> None:
 
 
 async def publish_metrics(redis, metrics) -> None:
-    payload = {"type": "metrics", "payload": metrics.model_dump()}
+    payload = {"type": "metrics", "payload": metrics.model_dump(mode="json")}
     data = orjson.dumps(payload).decode("utf-8")
     await redis.publish("vf.metrics", data)
     await redis.set("vf:metrics", data)
@@ -62,6 +63,9 @@ async def run() -> None:
             await publish_graph(redis, result.snapshot, settings)
             for incident in result.incidents:
                 await publish_incident(redis, incident, settings)
+                await schedule_escalation_if_needed(
+                    redis, incident, sla_seconds=settings.escalation_sla_seconds
+                )
             await publish_metrics(redis, result.metrics)
 
     async def missing_loop() -> None:
@@ -71,6 +75,9 @@ async def run() -> None:
                 await publish_graph(redis, result.snapshot, settings)
                 for incident in result.incidents:
                     await publish_incident(redis, incident, settings)
+                    await schedule_escalation_if_needed(
+                        redis, incident, sla_seconds=settings.escalation_sla_seconds
+                    )
                 await publish_metrics(redis, result.metrics)
             await asyncio.sleep(1.0)
 
