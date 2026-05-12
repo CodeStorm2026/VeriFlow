@@ -2,6 +2,8 @@
 
 **Hackathon — CodeStorm team, case 1.** Jury pitch (problem, market, competitors, team): [CODESTORM.md](./CODESTORM.md). Defense / demo checklist and mentor meeting notes are there too, **sections 9–10**.
 
+**Full system handbook** (architecture, every service, APIs, env vars, frontend modules, troubleshooting): [docs/VERIFLOW_HANDBOOK.md](./docs/VERIFLOW_HANDBOOK.md).
+
 Realtime **fiat + crypto settlement** reconciliation: it reconstructs payment flows where a
 **crypto / FX bridge** (gateway → exchange → bank) is as important as classic card rails, detects
 mismatches in amounts, network fees, and FX legs, and streams live graph updates over WebSockets.
